@@ -247,7 +247,7 @@ const resetQuiz = () => {
   showHint.value = false
   allQuizzesCnt.value = 0
   allUserAnswersCnt.value = 0
-  allCorrectCount = 0
+  allCorrectCount.value = 0
 }
 </script>
 
