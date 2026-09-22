@@ -4,14 +4,15 @@
     <h1>CSVクイズアプリ</h1>
 
     <!-- 1. CSVファイル読み込みエリア -->
-    <div v-if="quizzes.length === 0" class="file-input-section">
+    <div v-if="currentSessionQuizzes.length === 0" class="file-input-section">
       <p>CSVファイルを選択してください。</p>
       <input type="file" accept=".csv" @change="handleFileUpload" />
     </div>
 
     <!-- 2. クイズ実行エリア -->
-    <div v-else-if="currentIndex < quizzes.length" class="quiz-section">
-      <div class="progress">問題: {{ currentIndex + 1 }} / {{ quizzes.length }}</div>
+    <div v-else-if="currentIndex < currentSessionQuizzes.length" class="quiz-section">
+      <div class="progress">問題: {{ currentIndex + 1 }} / {{ currentSessionQuizzes.length }} ({{ allUserAnswersCnt + 1 }} / {{ allQuizzesCnt }})</div>
+      <div class="progress"></div>
       
       <!-- 原型・意味・問題の表示 -->
       <div class="quiz-header">
@@ -26,7 +27,7 @@
         <button 
           v-for="(choice, index) in currentChoices" 
           :key="index" 
-          @click="selectAnswer(choice.label)"
+          @click="selectAnswer(choice.label, choice.text)"
           class="choice-btn"
         >
           <span class="choice-label">{{ choice.label }}:</span> {{ choice.text }}
@@ -45,7 +46,7 @@
     <!-- 3. 結果表示エリア（最終行まで完了後） -->
     <div v-else class="result-section">
       <h2>結果発表</h2>
-      <p class="score">正解数: {{ correctCount }} / {{ quizzes.length }}</p>
+      <p class="score">正解数: {{ correctCount }} / {{ currentSessionQuizzes.length }}</p>
 
       <div class="table-wrapper">
         <table class="result-table">
@@ -59,11 +60,11 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(quiz, index) in quizzes" :key="index" :class="{ 'row-correct': userAnswers[index] === quiz.answer, 'row-wrong': userAnswers[index] !== quiz.answer }">
+            <tr v-for="(quiz, index) in currentSessionQuizzes" :key="index" :class="{ 'row-correct': userAnswers[index] === quiz.answer, 'row-wrong': userAnswers[index] !== quiz.answer }">
               <td>{{ index + 1 }}</td>
               <td class="table-question-cell">{{ quiz.question }}</td>
-              <td><strong>{{ userAnswers[index] }}</strong></td>
-              <td><strong>{{ quiz.answer }}</strong></td>
+              <td><strong>{{ userAnswers[index] }}:{{ userAnswersText[index] }}</strong></td>
+              <td><strong>{{ quiz.answer }}:{{ quiz.txtAnswer }}</strong></td>
               <td>
                 <span v-if="userAnswers[index] === quiz.answer" class="badge correct">正解</span>
                 <span v-else class="badge wrong">不正解</span>
@@ -71,39 +72,38 @@
             </tr>
           </tbody>
         </table>
-      </div>
-
-      <button @click="resetQuiz" class="reset-btn">もう一度挑戦する</button>
+      </div> 
+      <p class="score">全体正解数: {{ allCorrectCount }} / {{ allQuizzesCnt}}</p>
+      <button v-if="quizzes.length > 0" @click="initNextSession" class="reset-btn">次の{{ CHUNK_SIZE }}問に挑戦する</button>
+      <button v-else @click="resetQuiz" class="reset-btn">もう一度最初から挑戦する</button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed } from 'vue';
 
-// 状態管理
-const quizzes = ref([])
-const currentIndex = ref(0)
-const userAnswers = ref([])
-const showHint = ref(false)
+// 1. 状態管理
+const quizzes = ref([]);              // CSVから読み込んだ全214問を保持する場所
+const currentSessionQuizzes = ref([]); // 現在解いているセッション（区切り）分のクイズ
+const currentIndex = ref(0);          // セッション内での現在の問題インデックス
+const userAnswers = ref([]);
+const userAnswersText = ref([]);
+const showHint = ref(false);
+const allQuizzesCnt = ref(0);
+const allUserAnswersCnt = ref(0);
+const allCorrectCount = ref(0);
 
+const CHUNK_SIZE = 10;   
 // 現在の問題オブジェクトを算出
-const currentQuiz = computed(() => quizzes.value[currentIndex.value] || {})
+// const currentQuiz = computed(() => quizzes.value[currentIndex.value] || {})
 
-// 現在の選択肢リストを構造化
-const currentChoices = computed(() => {
-  if (!currentQuiz.value.question) return []
-  return [
-    { label: 'A', text: currentQuiz.value.choiceA },
-    { label: 'B', text: currentQuiz.value.choiceB },
-    { label: 'C', text: currentQuiz.value.choiceC },
-    { label: 'D', text: currentQuiz.value.choiceD }
-  ]
-})
 
 // 正解数をカウント
 const correctCount = computed(() => {
-  return quizzes.value.filter((quiz, index) => userAnswers.value[index] === quiz.answer).length
+  const res = currentSessionQuizzes.value.filter((quiz, index) => userAnswers.value[index] === quiz.answer).length
+  allCorrectCount.value = allCorrectCount.value + res
+  return res
 })
 
 // CSVファイルを読み込んでパースする処理
@@ -171,7 +171,8 @@ const handleFileUpload = (event) => {
         choiceB: txtB, 
         choiceC: txtC, 
         choiceD: txtD, 
-        answer: correctLabel, // 内部の判定や結果表示は 'A'~'D' のラベルで行う
+        answer: correctLabel, // 内部の判定や結果表示は 'A'~'D' のラベルで行う,
+        txtAnswer: txtAnswer,
         hint: hint?.trim(), 
         baseForm: baseForm?.trim(), 
         meaning: meaning?.trim() 
@@ -180,26 +181,73 @@ const handleFileUpload = (event) => {
 
     // パース結果を反映
     quizzes.value = parsedQuizzes
+    allQuizzesCnt.value = quizzes.value.length
     currentIndex.value = 0
     userAnswers.value = []
     showHint.value = false
+    initNextSession();
   }
   reader.readAsText(file, 'UTF-8')
 }
+// 2. 次のセッション（区切り）を設定する関数
+const initNextSession = () => {
 
-// 選択肢ボタンを押したときの処理
-const selectAnswer = (label) => {
+  // ① 残りの全問題をランダムにシャッフル
+  const shuffled = [...quizzes.value].sort(() => Math.random() - 0.5);
+
+  // ② 指定の数（CHUNK_SIZE）だけ今回のセッション用に切り出す
+  currentSessionQuizzes.value = shuffled.slice(0, CHUNK_SIZE);
+
+  // ③ 出題が決まった問題を、元の全問題リストから削除（重複防止）
+  quizzes.value = quizzes.value.filter(
+    q => !currentSessionQuizzes.value.includes(q)
+  );
+
+  // ④ インデックスを最初の問題（0）に戻す
+  currentIndex.value = 0;
+  // 回答初期化
+  userAnswers.value = [];
+  userAnswersText.value = [];
+};
+
+// 3. 現在の問題データを取得（computed）
+const currentQuiz = computed(() => {
+  // quizzesではなく、現在セッションの配列から取得するよう変更
+  return currentSessionQuizzes.value[currentIndex.value] || {};
+});
+
+
+// 現在の選択肢リストを構造化
+const currentChoices = computed(() => {
+  if (!currentQuiz.value.question) return []
+  return [
+    { label: 'A', text: currentQuiz.value.choiceA },
+    { label: 'B', text: currentQuiz.value.choiceB },
+    { label: 'C', text: currentQuiz.value.choiceC },
+    { label: 'D', text: currentQuiz.value.choiceD }
+  ]
+})
+
+// 4. 回答を選択したとき
+const selectAnswer = (label, text) => {
   userAnswers.value.push(label)
+  userAnswersText.value.push(text)
   showHint.value = false
   currentIndex.value++
+  allUserAnswersCnt.value++
 }
 
 // クイズのリセット
 const resetQuiz = () => {
   quizzes.value = []
+  currentSessionQuizzes.value = []
   currentIndex.value = 0
   userAnswers.value = []
+  userAnswersText.value = []
   showHint.value = false
+  allQuizzesCnt.value = 0
+  allUserAnswersCnt.value = 0
+  allCorrectCount = 0
 }
 </script>
 
